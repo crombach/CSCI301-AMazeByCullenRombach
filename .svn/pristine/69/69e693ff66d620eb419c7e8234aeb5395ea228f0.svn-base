@@ -1,0 +1,430 @@
+package edu.wm.cs.cs301.cullenrombach.ui;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.os.Bundle;
+import android.os.Handler;
+import android.util.Log;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.Button;
+import android.widget.ImageButton;
+import android.widget.ProgressBar;
+import edu.wm.cs.cs301.cullenrombach.R;
+import edu.wm.cs.cs301.cullenrombach.R.id;
+import edu.wm.cs.cs301.cullenrombach.R.layout;
+import edu.wm.cs.cs301.cullenrombach.R.menu;
+import edu.wm.cs.cs301.cullenrombach.falstad.GraphicsWrapper;
+import edu.wm.cs.cs301.cullenrombach.falstad.Maze;
+
+public class PlayActivity extends Activity {
+	
+	private boolean showWalls, showMap, showSolution;
+	private String driverType = "Manual";
+	private int mazeSize = 2;
+	private GraphicsWrapper wrapper;
+	private ProgressBar energyBar;
+	private Maze maze = GeneratingActivity.maze;
+	private Thread driverThread;
+	private Handler mHandler = new Handler();
+	private boolean paused = false;
+	private Button pauseButton;
+	private Runnable mUpdateGraphics = new Runnable() {
+		   public void run() {
+			   // Check that the maze isn't paused.
+			   if(!paused) {
+				   // Update the energy bar.
+				   updateEnergy();
+				   // Update the GraphicsWrapper.
+				   wrapper.invalidate();
+			   }
+		   }
+	};
+
+	@Override
+	protected void onCreate(Bundle savedInstanceState) {
+		super.onCreate(savedInstanceState);
+		setContentView(R.layout.activity_play);
+		
+		// Get the information passed from AMazeActivity.
+		Bundle extras = getIntent().getExtras();
+		if (extras != null) {
+			showWalls = extras.getBoolean("showWalls");
+			showMap = extras.getBoolean("showMap");
+			showSolution = extras.getBoolean("showSolution");
+			driverType = extras.getString("driverType");
+			mazeSize = extras.getInt("mazeSize");
+		}
+		
+		// Get and store the pause button.
+		pauseButton = (Button)findViewById(R.id.pauseButton);
+		
+		// Change the UI based on the passed information.
+		// If the driver type was Manual, only make the pause button invisible.
+		if(driverType.equals("Manual")) {
+			pauseButton.setVisibility(View.GONE);
+		}
+		// If the driver type was anything else, make the movement buttons invisible.
+		else {
+			ImageButton buttonLeft = (ImageButton)findViewById(R.id.buttonLeft);
+			ImageButton buttonRight = (ImageButton)findViewById(R.id.buttonRight);
+			ImageButton buttonForward = (ImageButton)findViewById(R.id.buttonForward);
+			ImageButton buttonBackward = (ImageButton)findViewById(R.id.buttonBackward);
+			
+			buttonLeft.setVisibility(View.GONE);
+			buttonRight.setVisibility(View.GONE);
+			buttonForward.setVisibility(View.GONE);
+			buttonBackward.setVisibility(View.GONE);
+		}
+		
+		// Get the energy bar and update it.
+		energyBar = (ProgressBar)findViewById(R.id.energyBar);
+		
+		// Get the GraphicsWrapper and store it.
+		wrapper = (GraphicsWrapper)findViewById(R.id.GraphicsWrapper);
+		
+		// Connect the Maze and GraphicsWrapper.
+		maze.setWrapper(wrapper);
+		wrapper.setMaze(maze);
+		
+		// Set the correct Show variables in the Maze.
+		maze.setDriverType(driverType);
+		maze.setShowMaze(showWalls);
+		maze.setMapMode(showMap);
+		maze.setShowSolution(showSolution);
+		
+		// Give the maze a reference to this activity so it can call updateGraphics()
+		maze.setActivity(this);
+		
+		// Update the graphics.
+		maze.notifyViewerRedraw();
+		
+		// If the robot isn't manual, start running it through the Maze.
+		if(!driverType.equals("Manual")) {
+			runRobotDriver();
+		}
+	}
+
+	@Override
+	public boolean onCreateOptionsMenu(Menu menu) {
+		// Inflate the menu; this adds items to the action bar if it is present.
+		getMenuInflater().inflate(R.menu.play, menu);
+		
+		// Get the icons in the ActionBar.
+		MenuItem showMapItem = menu.findItem(R.id.show_map);
+		MenuItem showWallsItem = menu.findItem(R.id.show_walls);
+		MenuItem showSolutionItem = menu.findItem(R.id.show_solution);
+		
+		// Update their icons.
+		// Change the Map icon.
+		if(showMap) {
+			showMapItem.setIcon(R.drawable.map_on);
+		}
+		else {
+			showMapItem.setIcon(R.drawable.map);
+		}
+		// Change the Walls icon.
+		if(showWalls) {
+			showWallsItem.setIcon(R.drawable.walls_on);
+		}
+		else {
+			showWallsItem.setIcon(R.drawable.walls);
+		}
+		// Change the Solution icon.
+		if(showSolution) {
+			showSolutionItem.setIcon(R.drawable.solution_on);
+		}
+		else {
+			showSolutionItem.setIcon(R.drawable.solution);
+		}
+		
+		return true;
+	}
+
+	@Override
+	public boolean onOptionsItemSelected(MenuItem item) {
+		// Handle action bar item clicks here. The action bar will
+		// automatically handle clicks on the Home/Up button, so long
+		// as you specify a parent activity in AndroidManifest.xml.
+		int id = item.getItemId();
+		
+		// If the map button was pressed:
+		if (id == R.id.show_map) {
+			// Update the showMap value.
+			showMap = !showMap;
+			
+			// Change the icon.
+			if(showMap) {
+				item.setIcon(R.drawable.map_on);
+			}
+			else {
+				item.setIcon(R.drawable.map);
+			}
+			
+			// Update the graphics.
+			maze.keyDown('m');
+			
+			// Print a message to LogCat.
+			Log.v("ActionBar", "Show Map: " + showMap);
+			
+			return true;
+		}
+		
+		// If the wall button was pressed:
+		if (id == R.id.show_walls) {
+			// Update the showWalls value.
+			showWalls = !showWalls;
+			
+			// Change the icon.
+			if(showWalls) {
+				item.setIcon(R.drawable.walls_on);
+			}
+			else {
+				item.setIcon(R.drawable.walls);
+			}
+			
+			// Update the graphics.
+			maze.keyDown('z');
+			
+			// Print a message to LogCat.
+			Log.v("ActionBar", "Show Walls: " + showWalls);
+			
+			return true;
+		}
+		
+		// If the map button was pressed:
+		if (id == R.id.show_solution) {
+			// Update the showSolution value.
+			showSolution = !showSolution;
+			
+			// Change the icon.
+			if(showSolution) {
+				item.setIcon(R.drawable.solution_on);
+			}
+			else {
+				item.setIcon(R.drawable.solution);
+			}
+			
+			// Update the graphics.
+			maze.keyDown('s');
+			
+			// Print a message to LogCat.
+			Log.v("ActionBar", "Show Solution: " + showSolution);
+			
+			return true;
+		}
+		
+		return super.onOptionsItemSelected(item);
+	}
+	
+	/**
+	 * Go back to the home screen if the back button was pressed.
+	 */
+	@Override
+    public void onBackPressed()
+    {
+		// Log what we're doing.
+		Log.v("PlayActivity", "Moving to AMazeActivity");
+		
+		// Go back to the main screen.
+        Intent intent = new Intent(this, AMazeActivity.class);
+        startActivity(intent);
+        
+        // Finish this activity.
+     	this.finish();
+    }
+	
+	/**
+	 * Called when the user clicks the back button, sends them to the Finish
+	 * activity.
+	 * @param view The view that was clicked.
+	 */
+	public void moveToFinish(View view) {
+		// Log what we're doing.
+		Log.v("PlayActivity", "Moving to FinishActivity");
+		
+		// Move to the next screen, passing along the necessary information.
+		Intent intent = new Intent(this, FinishActivity.class);
+		intent.putExtra("userWon", maze.getUserWins());
+		intent.putExtra("pathLength", (int)(maze.getDriver().getPathLength()));
+		intent.putExtra("energyConsumed", (int)(maze.getDriver().getEnergyConsumption()));
+		intent.putExtra("mazeSize", mazeSize);
+		startActivity(intent);
+		
+		// Finish this activity.
+     	this.finish();
+	}
+	
+	/**
+	 * Move the robot forward if the forward button was pressed.
+	 */
+	public void moveForward(View view) {
+		// Make a new Thread that runs the driver.
+		driverThread = new Thread(new Runnable() {
+			public void run() {
+				// Log what we're doing.
+				Log.v("PlayActivity", "Robot told to move forward");
+
+				// Actually move the robot.
+				maze.keyDown('8');
+
+				// Check if the game is over.
+				if(maze.isGameOver()) {
+					moveToFinish(wrapper);
+				}
+			}
+		});
+
+		// Start the thread.
+		driverThread.start();
+	}
+	
+	/**
+	 * Move the robot backward if the backward button was pressed.
+	 */
+	public void moveBackward(View view) {
+		// Make a new Thread that runs the driver.
+		driverThread = new Thread(new Runnable() {
+			public void run() {
+				// Log what we're doing.
+				Log.v("PlayActivity", "Robot told to move backward");
+
+				// Actually move the robot.
+				maze.keyDown('2');
+
+				// Check if the game is over.
+				if(maze.isGameOver()) {
+					moveToFinish(wrapper);
+				}
+			}
+		});
+
+		// Start the thread.
+		driverThread.start();
+	}
+
+	/**
+	 * Move the robot left if the left button was pressed.
+	 */
+	public void moveLeft(View view) {
+		// Make a new Thread that runs the driver.
+		driverThread = new Thread(new Runnable() {
+			public void run() {
+				// Log what we're doing.
+				Log.v("PlayActivity", "Robot told to turn left");
+
+				// Actually move the robot.
+				maze.keyDown('4');
+
+				// Check if the game is over.
+				if(maze.isGameOver()) {
+					moveToFinish(wrapper);
+				}
+			}
+		});
+
+		// Start the thread.
+		driverThread.start();
+	}
+	
+	/**
+	 * Move the robot right if the right button was pressed.
+	 */
+	public void moveRight(View view) {
+		// Make a new Thread that runs the driver.
+		driverThread = new Thread(new Runnable() {
+			public void run() {
+				// Log what we're doing.
+				Log.v("PlayActivity", "Robot told to turn right");
+
+				// Actually move the robot.
+				maze.keyDown('6');
+
+				// Check if the game is over.
+				if(maze.isGameOver()) {
+					moveToFinish(wrapper);
+				}
+			}
+		});
+
+		// Start the thread.
+		driverThread.start();
+	}
+	
+	/**
+	 * Pause the current Robot driver.
+	 */
+	public void pauseGame(View view) {
+		// Update the boolean here.
+		paused = !paused;
+		
+		// Update the paused boolean in the Maze.
+		maze.setPaused(paused);
+		
+		// Set the button text and log what we're doing.
+		if(paused) {
+			pauseButton.setText(getString(R.string.resume_button));
+			Log.v("PlayActivity", "Playback paused");
+		}
+		else {
+			pauseButton.setText(getString(R.string.pause_button));
+			Log.v("PlayActivity", "Playback resumed");
+			// Let the Maze know that it can start again.
+			synchronized(maze) {
+				maze.notify();
+			}
+		}
+	}
+	
+	/**
+	 *  Update the energy level shown in the progress bar.
+	 */
+	private void updateEnergy() {
+		// Update the actual progress bar in the GUI.
+		energyBar.post(new Runnable() {
+			public void run() {
+				int energyLevel = (int)(2500 - maze.getDriver().getEnergyConsumption());
+				energyBar.setProgress(energyLevel);
+			}
+		});
+	}
+	
+	/**
+	 * Run the automated robot driver in a background thread
+	 * if the driver isn't manual.
+	 */
+	private void runRobotDriver() {
+		
+		// Make a new Thread that runs the driver.
+		driverThread = new Thread(new Runnable() {
+			public void run() {
+				Maze tempMaze = maze;
+				
+				// Log that the driver was started.
+				Log.v("PlayActivity", "RobotDriver started");
+				
+				tempMaze.runRobotDriver();
+				
+				// Log that the driver is done.
+				Log.v("PlayActivity", "RobotDriver finished");
+				
+				// Check if the game is over.
+				if(maze.isGameOver()) {
+					moveToFinish(wrapper);
+				}
+			}
+		});
+		
+		// Start the thread.
+		driverThread.start();
+	}
+	
+	/**
+	 * Public method called by Maze that is used to update the graphics in the wrapper
+	 * every time a step is taken.
+	 */
+	public void updateGraphics() {
+		mHandler.postDelayed(mUpdateGraphics, 16);
+	}
+}

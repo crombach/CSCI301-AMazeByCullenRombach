@@ -1,0 +1,234 @@
+package edu.wm.cs.cs301.cullenrombach.falstad;
+
+import android.content.Context;
+import android.content.res.TypedArray;
+import android.graphics.*;
+import android.graphics.Paint.*;
+import android.graphics.drawable.*;
+import android.util.AttributeSet;
+import android.util.Log;
+import android.view.View;
+import edu.wm.cs.cs301.cullenrombach.R;
+
+/**
+ * This class is used to encapsulate the graphics functionality of the maze application
+ * in order to avoid using AWT or Swing packages in other classes in order to prepare for
+ * functionality on the Android platform.
+ * 
+ * @author Cullen Rombach (cmromb)
+ */
+
+public class GraphicsWrapper extends View {
+	
+	public enum Colors { black, darkGray, white, gray, yellow, red }; // The list of possible colors.
+	
+	private Maze maze; // The maze object this GraphicsWrapper is drawing.
+	
+	// Android graphics stuff.
+	private Canvas gc; // The Canvas we will be drawing on.
+	private Paint paint; // Stores color information.
+	private Bitmap frame; // The image we are drawing.
+
+	/**
+	 * Default constructor.
+	 * @param context The application environment in which the graphics are being drawn.
+	 * @param attrs Set of attributes for the creation of the View.
+	 * @param maze The maze that this Graphics Wrapper is attached to.
+	 */
+	public GraphicsWrapper(Context context, AttributeSet attrs) {
+		// Call View's constructor.
+		super(context, attrs);
+		
+		// Set up the Paint object.
+		paint = new Paint();
+		paint.setStyle(Paint.Style.FILL);
+		paint.setColor(Color.BLACK);
+		
+		// Set up the Bitmap we'll be drawing.
+		frame = Bitmap.createBitmap(Constants.VIEW_WIDTH, Constants.VIEW_HEIGHT, Bitmap.Config.ARGB_8888);
+		
+		// Set up the Canvas.
+		gc = new Canvas(frame);
+	}
+	
+	/**
+	 * Callback method inherited from View that requests that this View draws itself.
+	 * @param canvas The Canvas that will be drawn on.
+	 */
+	@Override
+	public void onDraw(Canvas canvas) {
+		super.onDraw(canvas);
+		canvas.drawBitmap(frame, 0, 0, paint);
+		// Tell the maze to keep running if it isn't paused.
+		if(maze != null) {
+			synchronized(maze) {
+				if(maze.isWaitingForDraw()) {
+					// Let the Maze know it can draw again.
+					maze.setWaitingForDraw(false);
+					maze.notify();
+				}
+			}
+		}
+	}
+	
+	/**
+	 * Forces the view to be a square of size 400x400.
+	 * Borrowed from:
+	 * http://www.jayway.com/2012/12/12/creating-custom-android-views-part-4-measuring-and-how-to-force-a-view-to-be-square/
+	 */
+	@Override
+	protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+	    super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+	 
+	    int size = 0;
+	    int width = 400; //getMeasuredWidth();
+	    int height = 400; //getMeasuredHeight();
+	    int widthWithoutPadding = width - getPaddingLeft() - getPaddingRight();
+	    int heigthWithoutPadding = height - getPaddingTop() - getPaddingBottom();
+	 
+	    // set the dimensions
+	    if (widthWithoutPadding > heigthWithoutPadding) {
+	        size = heigthWithoutPadding;
+	    } else {
+	        size = widthWithoutPadding;
+	    }
+	 
+	    setMeasuredDimension(size + getPaddingLeft() + getPaddingRight(), size + getPaddingTop() + getPaddingBottom());
+	}
+	
+	/**
+	 * Sets the paint color to the given color.
+	 * @param c The desired color.
+	 */
+	public void setColor(Colors c) {
+		switch(c) {
+		case black:
+			paint.setColor(Color.BLACK); break;
+		case darkGray:
+			paint.setColor(Color.DKGRAY); break;
+		case white:
+			paint.setColor(Color.WHITE); break;
+		case gray:
+			paint.setColor(Color.GRAY); break;
+		case yellow:
+			paint.setColor(Color.YELLOW); break;
+		case red:
+			paint.setColor(Color.RED); break;
+		}
+	}	
+	
+	/**
+	 * Used for removing the AWT methods from Seg. Sets the color
+	 * of the graphics object to the given RGB values.
+	 * @param col The color of a segment, which is being passed to this wrapper.
+	 */
+	void setColor(int[] col) {
+		paint.setColor(Color.rgb(col[0] , col[1] , col[2]));
+	}
+	
+	/**
+	 * Used for removing the AWT methods from Seg.
+	 * @param col An array of RBG values.
+	 * @return The RGB value of the color represented by col.
+	 */
+	public static int getRGB(int[] col) {
+		return Color.rgb(col[0], col[1], col[2]);
+	}
+	
+	/**
+	 * Takes an imput RBG value and returns its individual components.
+	 * @param col The RBG value of a color.
+	 * @return An array containing the RGB values of the given color.
+	 */
+	public static int[] getColorArray(int col) {
+		int[] rgb = new int[3];
+		rgb[0] = Color.red(col);
+		rgb[1] = Color.green(col);
+		rgb[2] = Color.blue(col);
+		return rgb;
+	}
+	
+	/**
+	 * Draws a line from the first given point to the second given point
+	 * using this object's paint color.
+	 * @param x1 The x component of the first point.
+	 * @param y1 The y component of the first point.
+	 * @param x2 The x component of the second point.
+	 * @param y2 The y component of the second point.
+	 */
+	public void drawLine(int x1 , int y1 , int x2 , int y2) {
+		gc.drawLine(x1 , y1 , x2 , y2, paint);
+	}
+	
+	/**
+	 * Fills an oval using the graphics object.
+	 * @param x The x position of the oval.
+	 * @param y The y position of the oval.
+	 * @param width The width of the oval.
+	 * @param height The height of the oval.
+	 */
+	public void fillOval(int x, int y, int width, int height) {
+		RectF rectf = new RectF(x, y, x + width, y + height);
+		gc.drawOval(rectf, paint);
+	}
+	
+	/**
+	 * Fills a rectangle of the given dimensions at the given position
+	 * with the color of the current paint object.
+	 * @param x The x position of the rectangle.
+	 * @param y The y position of the rectangle.
+	 * @param width The width of the rectangle.
+	 * @param height The height of the rectangle.
+	 */
+	public void fillRect(int x, int y, int width, int height) {
+		gc.drawRect(x, y, x + width, y + height, paint);
+	}
+	
+	/**
+	 * Use the canvas object to fill a polygon of the given size.
+	 * The code for this method was modified from an answer on StackOverflow.
+	 * @param xPoints An array of x coordinates.
+	 * @param yPoints An array of y coordinates.
+	 * @param nPoints The total number of points.
+	 */
+	public void fillPolygon(int[] xPoints, int[] yPoints, int nPoints) {
+		Path polyPath = new Path();
+		
+		//polyPath.reset(); // only needed when reusing this path for a new build
+		
+		// First point
+		polyPath.moveTo(xPoints[0], yPoints[0]);
+		
+		// Loop through the given points and draw lines to them.
+		for(int i=1; i<nPoints; i++) {
+			polyPath.lineTo(xPoints[i], yPoints[i]);
+		}
+		
+		// Connect back to last point.
+		polyPath.lineTo(xPoints[0], yPoints[0]);
+
+		gc.drawPath(polyPath, paint);
+	}
+	
+	/**
+	 * Set the thickness of the lines drawn by the paint.
+	 * @param thickness The thickness of the line in pixels.
+	 */
+	public void setLineThickness(int thickness) {
+		paint.setStrokeWidth(thickness);
+	}
+	
+	/**
+	 * Sets the Maze object connected to this GraphicsWrapper.
+	 */
+	public void setMaze(Maze maze) {
+		this.maze = maze;
+	}
+	
+	/**
+	 * Returns the Maze object connected to this GraphicsWrapper.
+	 */
+	public Maze getMaze() {
+		return maze;
+	}
+}

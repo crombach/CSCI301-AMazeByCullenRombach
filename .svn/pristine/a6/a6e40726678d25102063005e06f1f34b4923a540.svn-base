@@ -1,0 +1,682 @@
+package edu.wm.cs.cs301.cullenrombach.falstad;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+
+import android.util.Log;
+import edu.wm.cs.cs301.cullenrombach.ui.PlayActivity;
+
+/**
+ * Class handles the user interaction for the maze. 
+ * It implements a state-dependent behavior that controls the display and reacts to key board input from a user. 
+ * After refactoring the original code from an applet into a wrapper, it is wrapped by a MazeApplication to be a java application 
+ * and a MazeApp to be an applet for a web browser. At this point user keyboard input is first dealt with a key listener
+ * and then handed over to a Maze object by way of the keyDown method.
+ *
+ * This code is refactored code from Maze.java by Paul Falstad, www.falstad.com, Copyright (C) 1998, all rights reserved
+ * Paul Falstad granted permission to modify and use code for teaching purposes.
+ * Refactored by Peter Kemper
+ */
+// MEMO: original code: public class Maze extends Applet {
+public class Maze {
+
+	// Model View Controller pattern, the model needs to know the viewers
+	// however, all viewers share the same graphics to draw on, such that the share graphics
+	// are administered by the Maze object
+	final protected ArrayList<Viewer> views = new ArrayList<Viewer>() ; 
+	protected GraphicsWrapper wrapper ; // graphics to draw on, shared by all views
+
+	protected int percentdone = 0; // describes progress during generation phase
+
+	protected boolean showMaze;		 	// toggle switch to show overall maze on screen
+	protected boolean showSolution;		// toggle switch to show solution in overall maze on screen
+	protected boolean solving;			// toggle switch 
+	protected boolean mapMode; // true: display map of maze, false: do not display map of maze
+	// map_mode is toggled by user keyboard input, causes a call to draw_map during play mode
+
+	//static final int viewz = 50;    
+	protected int viewx, viewy, angle;
+	protected int dx; // current x direction (always starts as 1)
+	protected int dy; // current y direction (always starts as 0)
+	protected int px, py ; // current position on maze grid (x,y)
+	protected int walkStep;
+	protected int viewdx, viewdy; // current view direction
+
+
+	// debug stuff
+	protected boolean deepdebug = false;
+	protected boolean allVisible = false;
+	protected boolean newGame = false;
+
+	// properties of the current maze
+	protected int mazew; // width of maze
+	protected int mazeh; // height of maze
+	protected Cells mazecells ; // maze as a matrix of cells which keep track of the location of walls
+	protected Distance mazedists ; // a matrix with distance values for each cell towards the exit
+	protected Cells seencells ; // a matrix with cells to memorize which cells are visible from the current point of view
+	// the FirstPersonDrawer obtains this information and the MapDrawer uses it for highlighting currently visible walls on the map
+	private BSPNode rootnode ; // a binary tree type search data structure to quickly locate a subset of segments
+	// a segment is a continuous sequence of walls in vertical or horizontal direction
+	// a subset of segments need to be quickly identified for drawing
+	// the BSP tree partitions the set of all segments and provides a binary search tree for the partitions
+	
+
+	// Mazebuilder is used to calculate a new maze together with a solution
+	// The maze is computed in a separate thread. It is started in the local Build method.
+	// The calculation communicates back by calling the local newMaze() method.
+	protected MazeBuilder mazebuilder;
+
+	
+	// fixing a value matching the escape key
+	protected final int ESCAPE = 27;
+
+	// generation method used to compute a maze
+	protected int method = 0 ; // 0 : default method, Falstad's original code
+	// method == 1: Prim's algorithm
+	// method == 2: Eller's algorithm (CULLEN ROMBACH)
+
+	protected int zscale = Constants.VIEW_HEIGHT/2;
+
+	protected RangeSet rset;
+	
+	// Store the robot drivers used by this Maze.
+	protected RobotDriver driver; // Used in all cases.
+	protected ManualDriver manualDriver; // Only used if the user wants to drive the robot manually.
+	protected String driverType = "Manual"; // The type of the "driver" field, stored as a string.
+	
+	// Store whether or not the player won the maze game.
+	// this is used by MazeView to draw the end screen.
+	protected boolean userWins = true;
+	protected boolean gameOver = false;
+	
+	// The PlayActivity this maze interacts with.
+	private PlayActivity activity;
+	
+	// Booleans for controlling graphics drawing.
+	private boolean waitingForDraw = false;
+	private boolean paused = false;
+	
+	/**
+	 * Constructor
+	 */
+	public Maze() {
+		super() ;
+	}
+	/**
+	 * Constructor that also selects a particular generation method
+	 */
+	public Maze(int method)
+	{
+		super() ;
+		// 0 is default, do not accept other settings but 0, 1, and 2
+		// Modified to accept Eller's algorithm (cmromb).
+		if (0 == method || 1 == method || 2 == method)
+			this.method = method ;
+	}
+	/**
+	 * Method to initialize internal attributes. Called separately from the constructor. 
+	 */
+	public void init() {
+		rset = new RangeSet();
+	}
+	
+	/**
+	 * Method obtains a new Mazebuilder and has it compute new maze, 
+	 * it is only used in keyDown()
+	 * @param skill level determines the width, height and number of rooms for the new maze
+	 */
+	public void build(int skill) {
+		percentdone = 0;
+		// select generation method
+		switch(method){
+		case 2: mazebuilder = new MazeBuilderEller(); // generate with Eller's algorithm.
+		break;
+		case 1 : mazebuilder = new MazeBuilderPrim(); // generate with Prim's algorithm
+		break ;
+		case 0: // generate with Falstad's original algorithm (0 and default), note the missing break statement
+		default : mazebuilder = new MazeBuilder();
+		break ;
+		}
+		// adjust settings and launch generation in a separate thread
+		mazew = Constants.SKILL_X[skill];
+		mazeh = Constants.SKILL_Y[skill];
+		mazebuilder.build(this, mazew, mazeh, Constants.SKILL_ROOMS[skill], Constants.SKILL_PARTCT[skill]);
+		// mazebuilder performs in a separate thread and calls back by calling newMaze() to return newly generated maze
+	}
+	
+	/**
+	 * Call back method for MazeBuilder to communicate newly generated maze as reaction to a call to build()
+	 * @param root node for traversals, used for the first person perspective
+	 * @param cells encodes the maze with its walls and border
+	 * @param dists encodes the solution by providing distances to the exit for each position in the maze
+	 * @param startx current position, x coordinate
+	 * @param starty current position, y coordinate
+	 */
+	public void newMaze(BSPNode root, Cells c, Distance dists, int startx, int starty) {
+		if (Cells.deepdebugWall)
+		{   // for debugging: dump the sequence of all deleted walls to a log file
+			// This reveals how the maze was generated
+			c.saveLogFile(Cells.deepedebugWallFileName);
+		}
+		// adjust internal state of maze model
+		showMaze = showSolution = solving = false;
+		mazecells = c ;
+		mazedists = dists;
+		seencells = new Cells(mazew+1,mazeh+1) ;
+		rootnode = root;
+		setCurrentDirection(1, 0) ;
+		setCurrentPosition(startx,starty) ;
+		walkStep = 0;
+		viewdx = dx<<16; 
+		viewdy = dy<<16;
+		angle = 0;
+		mapMode = false;
+		
+		cleanViews() ;
+		
+		// Set up the robot and the robot driver.
+		setUpRobotDriver();
+				
+		// register views for the new maze
+		// mazew and mazeh have been set in build() method before mazebuider was called to generate a new maze.
+		// reset map_scale in mapdrawer to a value of 18 ///// WAS 10////
+		addView(new FirstPersonDrawer(Constants.VIEW_WIDTH,Constants.VIEW_HEIGHT,
+				Constants.MAP_UNIT,Constants.STEP_SIZE, mazecells, seencells, 18, mazedists.getDists(), mazew, mazeh, root, this));
+		// order of registration matters, code executed in order of appearance!
+		addView(new MapDrawer(Constants.VIEW_WIDTH,Constants.VIEW_HEIGHT,Constants.MAP_UNIT,Constants.STEP_SIZE, mazecells, seencells, 18, mazedists.getDists(), mazew, mazeh, this));
+	}
+	
+	
+	///////////////////////////// Methods for Controlling the Robot Driver //////////////////////
+	
+	/**
+	 * Sets this Maze's driverType field to the given value,
+	 * or to "ManualDriver" if it's not an accepted robot type.
+	 * @param type
+	 */
+	public void setDriverType(String type) {
+		driverType = type;
+		setUpRobotDriver();
+	}
+	
+	/**
+	 * Sets up the robot driver for this maze depending on the type selected
+	 */
+	private void setUpRobotDriver() {
+		switch(driverType) {
+		case "Wizard":
+			driver = new Wizard();
+			driver.setDistance(mazedists);
+			driver.setRobot(new BasicRobot(this));
+			break;
+		case "Wall Follower":
+			driver = new WallFollower();
+			driver.setRobot(new BasicRobot(this));
+			break;
+		case "Curious Mouse":
+			driver = new CuriousMouse();
+			driver.setDimensions(mazew, mazeh);
+			driver.setRobot(new BasicRobot(this));
+			break;
+		// The default case is a manual driver.
+		default:
+			manualDriver = new ManualDriver();
+			driver = manualDriver;
+			manualDriver.setRobot(new BasicRobot(this));
+			break;
+		}
+	}
+	
+	/**
+	 * Runs the robot driver's drive2Exit() method
+	 * and moves to the end screen if the robot wins or loses.
+	 */
+	public void runRobotDriver() {
+		try {
+			userWins = driver.drive2Exit();
+			gameOver = true;
+		} catch (Exception e) {
+			// Go to the end screen if there was a problem.
+			Log.v("Maze", "Error in robot driver");
+			userWins = false;
+			gameOver = true;
+		}
+	}
+
+	/////////////////////////////// Methods for the Model-View-Controller Pattern /////////////////////////////
+	/**
+	 * Register a view
+	 */
+	public void addView(Viewer view) {
+		views.add(view) ;
+	}
+	/**
+	 * Unregister a view
+	 */
+	public void removeView(Viewer view) {
+		views.remove(view) ;
+	}
+	/**
+	 * Remove obsolete FirstPersonDrawer and MapDrawer
+	 */
+	private void cleanViews() {
+		// go through views and notify each one
+		Iterator<Viewer> it = views.iterator() ;
+		while (it.hasNext())
+		{
+			Viewer v = it.next() ;
+			if ((v instanceof FirstPersonDrawer)||(v instanceof MapDrawer))
+			{
+				//System.out.println("Removing " + v);
+				it.remove() ;
+			}
+		}
+
+	}
+	
+	/**
+	 * Notify all registered viewers to redraw their graphics. Do not redraw
+	 * until the GraphicsWrapper has already shown the previous frame.
+	 */
+	public void notifyViewerRedraw() {
+		// Make the maze wait for the graphics to finish.
+		synchronized(this) {
+			try {
+				while(isWaitingForDraw() || isPaused()) {
+					this.wait();
+				}
+			} catch (Exception e) {
+				Log.e("Maze", "Maze thread interrupted");
+			}
+		}
+		// Go through views and notify each one
+		Iterator<Viewer> it = views.iterator() ;
+		while (it.hasNext())
+		{
+			Viewer v = it.next();
+			// Viewers draw on the buffer graphics
+			v.redraw(wrapper, Constants.STATE_PLAY, px, py, viewdx, viewdy, walkStep, Constants.VIEW_OFFSET, rset, angle);
+		}
+		// Update the UI.
+		activity.updateGraphics();
+		// Flag that the maze is waiting for a redraw.
+		setWaitingForDraw(true);
+	}
+	
+	////////////////////////////// Actions that can be performed on the maze model ///////////////////////////
+	public void setCurrentPosition(int x, int y)
+	{
+		px = x ;
+		py = y ;
+	}
+	
+	public void setCurrentDirection(int x, int y)
+	{
+		dx = x ;
+		dy = y ;
+	}
+
+	final double radify(int x) {
+		return x*Math.PI/180;
+	}
+
+	/**
+	 * Allows external increase to percentage in generating mode with subsequence graphics update
+	 * @param pc gives the new percentage on a range [0,100]
+	 * @return true if percentage was updated, false otherwise
+	 */
+	public boolean increasePercentage(int pc) {
+		if (percentdone < pc && pc < 100) {
+			percentdone = pc;
+			return true ;
+		}
+		return false ;
+	}
+
+	/////////////////////// Methods for debugging ////////////////////////////////
+	private void dbg(String str) {
+		Log.v("Maze", str);
+	}
+
+	private void logPosition() {
+		if (!deepdebug)
+			return;
+		dbg("x="+viewx/Constants.MAP_UNIT+" ("+
+				viewx+") y="+viewy/Constants.MAP_UNIT+" ("+viewy+") ang="+
+				angle+" dx="+dx+" dy="+dy+" "+viewdx+" "+viewdy);
+	}
+	///////////////////////////////////////////////////////////////////////////////
+
+	/**
+	 * Helper method for walk()
+	 * @param dir
+	 * @return true if there is no wall in this direction
+	 */
+	private boolean checkMove(int dir) {
+		// obtain appropriate index for direction (CW_BOT, CW_TOP ...) 
+		// for given direction parameter
+		int a = angle/90;
+		if (dir == -1)
+			a = (a+2) & 3;
+		// check if cell has walls in this direction
+		// returns true if there are no walls in this direction
+		return mazecells.hasMaskedBitsFalse(px, py, Constants.MASKS[a]) ;
+	}
+
+	private void rotateStep() {
+		angle = (angle+1800) % 360;
+		viewdx = (int) (Math.cos(radify(angle))*(1<<16));
+		viewdy = (int) (Math.sin(radify(angle))*(1<<16));
+		notifyViewerRedraw();
+	}
+
+	private void rotateFinish() {
+		setCurrentDirection((int) Math.cos(radify(angle)), (int) Math.sin(radify(angle))) ;
+		logPosition();
+	}
+	
+	private void moveStep() {
+		notifyViewerRedraw();
+		/*try {
+			Thread.sleep(10);
+		} catch (Exception e) { }*/
+	}
+
+	private void walkFinish(int dir) {
+		setCurrentPosition(px + dir*dx, py + dir*dy) ;
+		
+		if (isEndPosition(px,py)) {
+			gameOver = true;
+			userWins = true;
+		}
+		walkStep = 0;
+		logPosition();
+	}
+
+	/**
+	 * checks if the given position is outside the maze
+	 * @param x
+	 * @param y
+	 * @return true if position is outside, false otherwise
+	 */
+	public boolean isEndPosition(int x, int y) {
+		return x < 0 || y < 0 || x >= mazew || y >= mazeh;
+	}
+
+	synchronized public void walk(int dir) {
+		if (!checkMove(dir))
+			return;
+		for (int step = 0; step != 4; step++) {
+			walkStep += dir;
+			moveStep();
+		}
+		walkFinish(dir);
+	}
+
+	synchronized public void rotate(int dir) {
+		final int originalAngle = angle;
+		final int steps = 4;
+
+		for (int i = 0; i != steps; i++) {
+			angle = originalAngle + dir*(90*(i+1))/steps;
+			rotateStep();
+		}
+		rotateFinish();
+	}
+
+
+	/**
+	 * Method incorporates all reactions to keyboard input in original code, 
+	 * after refactoring, Java Applet and Java Application Panel call this method to communicate input.
+	 */
+	public boolean keyDown(int key) {
+		// possible inputs for key: unicode char value, 0-9, A-Z, Escape, 'k','j','h','l'
+		// react to input for directions
+		// react to input for displaying a map of the current path or of the overall maze (on/off toggle switch)
+		// react to input to display solution (on/off toggle switch)
+		switch (key) {
+		case 'k': case '8': // UP
+			if(driverType.equals("Manual")) {
+				// Move the robot by way of the driver.
+				try {
+					// Move the robot.
+					manualDriver.moveForward();
+					checkWin();
+				} catch(Exception e) {
+					checkWin();
+				}
+			}
+			break;
+		case 'h': case '4': // LEFT
+			if(driverType.equals("Manual")) {
+				// turn the robot by way of the driver.
+				try {
+					// Move the robot.
+					manualDriver.turnLeft();
+					checkWin();
+				} catch(Exception e) {
+					checkWin();
+				}
+			}
+			break;
+		case 'l': case '6': // RIGHT
+			if(driverType.equals("Manual")) {
+				// Turn the robot by way of the driver.
+				try {
+					// Move the robot.
+					manualDriver.turnRight();
+					checkWin();
+				} catch(Exception e) {
+					checkWin();
+				}
+			}
+			break;
+		case 'j': case '2': // DOWN
+			// Move the robot by way of the driver.
+			if(driverType.equals("Manual")) {
+				try {
+					// Move the robot.
+					manualDriver.moveBackward();
+					checkWin();
+				} catch(Exception e) {
+					checkWin();
+				}
+			}
+			break;
+		case 'm': // SHOW/HIDE MAP
+			mapMode = !mapMode;
+			if(driverType.equals("Manual")) {
+				notifyViewerRedraw() ; 
+			}
+			break;
+		case 'z': // SHOW/HIDE WALLS
+			showMaze = !showMaze; 		
+			if(driverType.equals("Manual")) {
+				notifyViewerRedraw() ; 
+			} 
+			break;
+		case 's': // SHOW/HIDE SOLUTION
+			showSolution = !showSolution; 		
+			if(driverType.equals("Manual")) {
+				notifyViewerRedraw() ; 
+			}
+			break;
+		}
+		return true;
+	}
+
+	/////////////////////////// REFACTORED HELPER METHODS ////////////////////////////////
+	
+	boolean isInMapMode() { 
+		return mapMode ; 
+	} 
+	boolean isInShowMazeMode() { 
+		return showMaze ; 
+	} 
+	boolean isInShowSolutionMode() { 
+		return showSolution ; 
+	} 
+	public int getPercentDone(){
+		return percentdone ;
+	}
+	public GraphicsWrapper getWrapper() {
+		return wrapper ;
+	}
+
+	public int[] getCurrentPosition() {
+		return new int[] {px, py};
+	}
+
+	public int[] getCurrentDirection() {
+		return new int[] {dx, dy};
+	}
+	
+	public int getWidth() {
+		return mazew;
+	}
+	
+	public void setWidth(int w) {
+		mazew = w;
+	}
+	
+	public int getHeight() {
+		return mazeh;
+	}
+	
+	public void setHeight(int h) {
+		mazeh = h;
+	}
+	
+	public Cells getCells() {
+		return mazecells;
+	}
+	
+	public RobotDriver getDriver() {
+		return driver;
+	}
+	
+	public int getEscapeKey() {
+		return ESCAPE;
+	}
+	
+	public MazeBuilder getMazeBuilder() {
+		return mazebuilder;
+	}
+	
+	public Distance getDistances() {
+		return mazedists;
+	}
+	
+	public void setDistances(Distance dists) {
+		mazedists = dists;
+	}
+	
+	public int getMethod() {
+		return method;
+	}
+	
+	public void setMethod(int m) {
+		method = m;
+	}
+	
+	public boolean getUserWins() {
+		return userWins;
+	}
+	/**
+	 *  Set the GraphicsWrapper of this Maze.
+	 * @param gw the GraphicsWrapper this Maze will be connected to
+	 */
+	public void setWrapper(GraphicsWrapper gw) {
+		wrapper = gw;
+	}
+	/**
+	 *  Set the show maze variable.
+	 * @param b True if the Maze walls should be shown
+	 */
+	public void setShowMaze(boolean b) {
+		showMaze = b;
+		wrapper.invalidate();
+	}
+	/**
+	 *  Set the show solution variable.
+	 * @param b True if the solution should be shown
+	 */
+	public void setShowSolution(boolean b) {
+		showSolution = b;
+		wrapper.invalidate();
+	}
+	/**
+	 *  Set the show map variable.
+	 * @param b True if the map should be shown
+	 */
+	public void setMapMode(boolean b) {
+		mapMode = b;
+		wrapper.invalidate();
+	}
+	/**
+	 *  Return whether or not the game is over.
+	 * @return true if the game is over, false otherwise.
+	 */
+	public synchronized boolean isGameOver() {
+		return gameOver;
+	}
+	
+	/**
+	 *  Check for a win or loss in the game.
+	 */
+	private void checkWin() {
+		if(isEndPosition(px, py)) {
+			gameOver = true;
+			userWins = true;
+		}
+		else if(manualDriver.getRobot().hasStopped()) {
+			gameOver = true;
+			userWins = false;
+		}
+	}
+	
+	/**
+	 * Gives this Maze a reference to a PlayActivity for calling updateGraphics()
+	 * @param pa the PlayActivity to be stored.
+	 */
+	 public void setActivity(PlayActivity pa) {
+		 activity = pa;
+	 }
+	 
+	 /**
+	  * Sets the variable used to determine whether or not it is okay to request a redraw.
+	  * @param ok True if okay to redraw, otherwise false.
+	  */
+	 public synchronized void setWaitingForDraw(boolean ok) {
+		 waitingForDraw = ok;
+	 }
+	 
+	 /**
+	  * Returns whether or not this Maze is currently waiting for a redraw.
+	  */
+	 public synchronized boolean isWaitingForDraw() {
+		 return waitingForDraw;
+	 }
+	 
+	 /**
+	  * Sets the variable used to determine whether or not the game is paused.
+	  * @param ok True if paused, otherwise false.
+	  */
+	 public synchronized void setPaused(boolean b) {
+		 paused = b;
+	 }
+	 
+	 /**
+	  * @return whether or not this Maze is currently paused.
+	  */
+	 public synchronized boolean isPaused() {
+		 return paused;
+	 }
+	 
+	 /**
+	  * @return This Maze's rootnode.
+	  */
+	 public BSPNode getRootnode() {
+		 return rootnode;
+	 }
+}

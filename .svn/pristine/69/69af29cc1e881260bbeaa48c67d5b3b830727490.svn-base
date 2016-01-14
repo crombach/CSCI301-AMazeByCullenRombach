@@ -1,0 +1,275 @@
+package edu.wm.cs.cs301.cullenrombach.ui;
+
+
+import android.app.Activity;
+import android.content.Intent;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.Button;
+import android.widget.Switch;
+import android.widget.Spinner;
+import android.widget.ProgressBar;
+import android.support.v4.app.NavUtils;
+import edu.wm.cs.cs301.cullenrombach.R;
+import edu.wm.cs.cs301.cullenrombach.R.id;
+import edu.wm.cs.cs301.cullenrombach.R.layout;
+import edu.wm.cs.cs301.cullenrombach.R.menu;
+import edu.wm.cs.cs301.cullenrombach.falstad.Distance;
+import edu.wm.cs.cs301.cullenrombach.falstad.GraphicsWrapper;
+import edu.wm.cs.cs301.cullenrombach.falstad.Maze;
+import edu.wm.cs.cs301.cullenrombach.falstad.MazeFileReader;
+
+public class GeneratingActivity extends Activity {
+	
+	private ProgressBar progressBar;
+	private int progressBarStatus = 0;
+	private Button startButton;
+	private Thread mazeLoadThread;
+	private boolean showMap = false;
+	private boolean showWalls = false;
+	private boolean showSolution = false;
+	private Spinner driverSpinner;
+	private String driverType;
+	private String generatorType;
+	private int mazeSize;
+	public static Maze maze; // The Maze object for this application.
+
+	@Override
+	protected void onCreate(Bundle savedInstanceState) {
+		super.onCreate(savedInstanceState);
+		setContentView(R.layout.activity_generating);
+		
+		// Get the UI elements we need to interact with.
+		progressBar = (ProgressBar)findViewById(R.id.generatingProgressBar);
+		startButton = (Button)findViewById(R.id.playGeneratingButton);
+		driverSpinner = (Spinner)findViewById(R.id.driverSpinner);
+		
+		// Make the start button invisible.
+		startButton.setVisibility(View.GONE);
+		
+		// Get the information passed from AMazeActivity.
+		Bundle extras = getIntent().getExtras();
+		if (extras != null) {
+		    generatorType = extras.getString("generatorType");
+		    mazeSize = extras.getInt("mazeSize");
+		}
+		
+		// Make a new Maze depending upon the generator type.
+		if(generatorType.equals("Prim")) {
+			maze = new Maze(1);
+		}
+		else if(generatorType.equals("Eller")) {
+			maze = new Maze(2);
+		}
+		// Load from the maze if we need to.
+		else if(generatorType.equals("Saved File")) {
+			Log.v("GeneratingActivity", "Loading Maze from file maze_of_size_" + mazeSize + ".xml ...");
+			
+			// Load the maze.
+			MazeFileReader reader = new MazeFileReader(this, "maze_of_size_" + mazeSize + ".xml");
+			maze.setWidth(reader.getWidth());
+			maze.setHeight(reader.getHeight());
+			Distance dists = new Distance(reader.getDistances());
+			maze.setDistances(dists);
+			maze.newMaze(reader.getRootNode(), reader.getCells(), dists, reader.getStartX(),
+					reader.getStartY()) ;
+			
+			
+			Log.v("GeneratingActivity", "Maze loaded");
+		}
+		else if (generatorType.equals("Backtracker")){
+			maze = new Maze();
+		}
+		
+		// Initialize the Maze.
+		maze.init();
+		
+		if(!generatorType.equals("Saved File")) {
+			// Set up the thread that handles the maze generation progress bar.
+			mazeLoadThread = newMazeLoadThread();
+		
+			// Start updating the progress bar.
+			mazeLoadThread.start();
+			Log.v("GeneratingActivity", "MazeLoadThread started");
+		}
+	}
+
+	@Override
+	public boolean onCreateOptionsMenu(Menu menu) {
+		// Inflate the menu; this adds items to the action bar if it is present.
+		getMenuInflater().inflate(R.menu.generating, menu);
+		return true;
+	}
+
+	@Override
+	public boolean onOptionsItemSelected(MenuItem item) {
+		// Handle action bar item clicks here. The action bar will
+		// automatically handle clicks on the Home/Up button, so long
+		// as you specify a parent activity in AndroidManifest.xml.
+		int id = item.getItemId();
+		
+		// If the up button was pressed:
+		if (id == android.R.id.home) {
+			// Go to AMaze.
+			NavUtils.navigateUpFromSameTask(this);
+			// Interrupt maze generation.
+			maze.getMazeBuilder().buildThread.interrupt();
+			mazeLoadThread.interrupt();
+			
+			return true;
+		}
+		
+		return super.onOptionsItemSelected(item);
+	}
+	
+	/**
+	 * Go back to the home screen and stop maze generation if the back button was pressed.
+	 */
+	@Override
+    public void onBackPressed()
+    {
+		// Interrupt maze generation.
+		mazeLoadThread.interrupt();
+		
+		// Log what we're doing.
+		Log.v("GeneratingActivity", "Moving to AMazeActivity");
+		
+		// Go back to the main screen.
+        Intent intent = new Intent(this, AMazeActivity.class);
+        startActivity(intent);
+        
+        // Finish this activity.
+     	this.finish();
+    }
+	
+	/**
+	 * Called when the user clicks the back button, sends them to the Play
+	 * activity.
+	 * @param view The view that was clicked.
+	 */
+	public void moveToPlay(View view) {
+		// Wait for the maze generator to finish.
+		try {
+			mazeLoadThread.join();
+		} catch(InterruptedException e) {
+			Log.e("GeneratingActivity", "Maze loading thread interrupted.");
+		}
+		
+		// Save the robot type.
+		driverType = driverSpinner.getSelectedItem().toString();
+		
+		// Log what we're doing.
+		Log.v("GeneratingActivity", "Moving to PlayActivity");
+		Log.v("GeneratorActivity", "Driver Type: " + driverType);
+		Log.v("GeneratorActivity", "Show Map: " + showMap + "; Walls: " + showWalls + "; Solution: " + showSolution);
+		
+		// Move to the next screen.
+		Intent intent = new Intent(this, PlayActivity.class);
+		intent.putExtra("showMap", showMap);
+		intent.putExtra("showWalls", showWalls);
+		intent.putExtra("showSolution", showSolution);
+		intent.putExtra("driverType", driverType);
+		intent.putExtra("mazeSize", mazeSize);
+		startActivity(intent);
+		
+		// Finish this activity.
+		this.finish();
+	}
+	
+	/**
+	 * Handle clicks on the map visibility Switch.
+	 */
+	public void updateShowMap(View v) {
+		// Store the view as a Switch.
+		Switch mapSwitch = (Switch)v;
+		
+		//TODO: Change the map visibility.
+		showMap = mapSwitch.isChecked();
+		
+		// Log what we're doing.
+		Log.v("GeneratingActivity", "Show Map: " + showMap);
+	}
+	
+	/**
+	 * Handle clicks on the wall visibility Switch.
+	 */
+	public void updateShowWalls(View v) {
+		// Store the view as a Switch.
+		Switch wallSwitch = (Switch)v;
+				
+		//TODO: Change the wall visibility.
+		showWalls = wallSwitch.isChecked();
+				
+		// Log what we're doing.
+		Log.v("GeneratingActivity", "Show Walls: " + showWalls);
+	}
+	
+	/**
+	 * Handle clicks on the solution visibility Switch.
+	 */
+	public void updateShowSolution(View v) {
+		// Store the view as a Switch.
+		Switch solutionSwitch = (Switch)v;
+				
+		//TODO: Change the solution visibility.
+		showSolution = solutionSwitch.isChecked();
+				
+		// Log what we're doing.
+		Log.v("GeneratingActivity", "Show Solution: " + showSolution);
+	}
+	
+	/**
+	 * Helper method that sets up the maze loader thread and defines what it does.
+	 */
+	private Thread newMazeLoadThread() {
+		return new Thread(new Runnable() {
+            public void run() {
+            	// Reset the progress bar.
+            	progressBarStatus = 0;
+            	
+            	// Build the Maze.
+        		maze.build(mazeSize);
+            	
+            	// Keep looping while the progress bar isn't full.
+            	while (maze.getMazeBuilder().buildThread.isAlive()) {//progressBarStatus < progressBar.getMax()) {
+
+            		// Update the progress bar status.
+            		progressBarStatus = maze.getPercentDone();
+
+            		// Update the actual progress bar in the GUI.
+            		progressBar.post(new Runnable() {
+            			public void run() {
+            				progressBar.setProgress(progressBarStatus);
+            			}
+            		});
+
+            		// Check for a thread interruption.
+            		if(Thread.interrupted()) {
+            			return;
+            		}
+            	}
+            	
+            	// Set the progress bar to 100.
+            	// Update the actual progress bar in the GUI.
+        		progressBar.post(new Runnable() {
+        			public void run() {
+        				progressBar.setProgress(100);
+        			}
+        		});
+            	
+            	// Log that the maze generation is done.
+            	Log.v("GeneratingActivity", "MazeLoadThread finished");
+            	
+                // Set the button to be visible once the loading is done.
+                startButton.getHandler().post(new Runnable() {
+                    public void run() {
+                        startButton.setVisibility(View.VISIBLE);
+                    }
+                });
+            }
+        });
+	}
+}

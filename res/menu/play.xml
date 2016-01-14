@@ -1,0 +1,30 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:context="edu.wm.cs.cs301.cullenrombach.PlayActivity" >
+    
+    <!-- "Show Map", should appear as action button if possible -->
+    <item
+        android:id="@+id/show_map"
+        android:icon="@drawable/map"
+        android:title="@string/show_map"
+        android:orderInCategory="1"
+        android:showAsAction="ifRoom"/>
+    
+    <!-- "Show Walls", should appear as action button if possible -->
+    <item
+        android:id="@+id/show_walls"
+        android:icon="@drawable/walls"
+        android:title="@string/show_walls"
+        android:orderInCategory="2"
+        android:showAsAction="ifRoom"/>
+    
+    <!-- "Show Solution", should appear as action button if possible -->
+    <item
+        android:id="@+id/show_solution"
+        android:icon="@drawable/solution"
+        android:title="@string/show_solution"
+        android:orderInCategory="3"
+        android:showAsAction="ifRoom"/>
+    
+
+</menu>
